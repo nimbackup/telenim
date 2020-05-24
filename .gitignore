@@ -1,0 +1,11 @@
+*
+!*.*
+!*/
+!LICENSE
+# Caching and stuff, need to make it configurable
+tdlib
+# I cloned tdlib there
+td
+# I locally have td built in this folder
+lib
+config.json
