@@ -1,4 +1,4 @@
-import json, os, strformat, asyncdispatch
+import json, os, strformat, asyncdispatch, strutils
 
 const
   tdlib = "lib" / "libtdjson.so(|.1.6.0)"
@@ -78,7 +78,6 @@ proc newTdlibClient(loggingLevel = 1): TdlibClient =
 proc handleAuth(client: TdlibClient, event: JsonNode): Future[bool] {.async.} = 
   result = true
   let authState = event["authorization_state"]
-  echo event
   case authState["@type"].getStr()
   of "authorizationStateClosed":
     result = false
@@ -107,11 +106,12 @@ proc handleAuth(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
     let code = stdin.readLine()
     client.send(%*{"@type": "checkAuthenticationCode", "code": code})
   of "authorizationStateWaitRegistration":
-    discard
-    echo "nah"
+    echo "Registration not implemented yet"
     quit(1)
   of "authorizationStateWaitPassword":
     client.send(%*{"@type": "checkAuthenticationPassword", "password": Password})
+
+import mathexpr
 
 proc handleMsgUpdate(client: TdlibClient, event: JsonNode): Future[bool] {.async.} = 
   result = true
@@ -121,7 +121,7 @@ proc handleMsgUpdate(client: TdlibClient, event: JsonNode): Future[bool] {.async
   let cid = event["message"]["chat_id"].getInt()
   let mid = event["message"]["id"].getInt()
   let msg = event{"message", "content", "text", "text"}.getStr("")
-  echo event.pretty()
+  #echo event.pretty()
   case msg
   of ".status":
     client.send(%*{
@@ -138,6 +138,37 @@ proc handleMsgUpdate(client: TdlibClient, event: JsonNode): Future[bool] {.async
     })
   else:
     discard
+  if msg.startsWith ".solve":
+    let expr = msg.split(".solve ")[1]
+    let e = newEvaluator()
+    
+    try:
+      let res = e.eval(expr)
+      client.send(%*{
+        "@type": "editMessageText",
+        "chat_id": cid,
+        "message_id": mid,
+        "input_message_content": {
+          "@type": "inputMessageText",
+          "text": {
+            "@type": "formattedText",
+            "text": expr & " = " & $res
+          }
+        }
+      })
+    except:
+      client.send(%*{
+        "@type": "editMessageText",
+        "chat_id": cid,
+        "message_id": mid,
+        "input_message_content": {
+          "@type": "inputMessageText",
+          "text": {
+            "@type": "formattedText",
+            "text": "Not a valid math expression!"
+          }
+        }
+      })
 
 proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
   result = true

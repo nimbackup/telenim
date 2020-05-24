@@ -1,9 +1,25 @@
-import parseutils, strutils, strformat, strscans
+# I know this code is really far from perfect,
+# maybe I should've used macros to properly operate on AST instead
+# of strings, but the thing is that we don't need to generate definitions
+# every day, we just need to generate them *once* for one tdlib version
+# so this code is pretty rough and it's made to complete that task
+import parseutils, strutils, strformat, strscans, tables
 
 let data = open("td_api.tl", fmRead)
 
 var i = 0
 var line: string
+
+func toCamelCase*(str: string, firstUpper = false): string =
+  var makeUpper = firstUpper
+  for i, c in str:
+    if c == '_':
+      makeUpper = true
+    elif makeUpper:
+      result.add(c.toUpperAscii())
+      makeUpper = false
+    else:
+      result.add(c)
 
 proc toNimType(data: string): string = 
   # https://core.telegram.org/tdlib/docs/td__json__client_8h.html
@@ -17,6 +33,7 @@ proc toNimType(data: string): string =
   of "bytes": "string"
   of "Bool": "bool"
   of "string": "string"
+  of "double": "float"
   else:
     # Handle vectors of vectors and just vectors (recursively)
     var vectype: string
@@ -27,18 +44,29 @@ proc toNimType(data: string): string =
     else:
       data
 
-proc makeNimType(hdr: tuple[name, class: string], fields: seq[tuple[name: string, typ: string]]): string = 
-  result = fmt"  {hdr.name} = object of TlBase"
-  for field in fields:
-    var fname = field.name
-    if fname == "type": fname = "`" & fname & "`"
-    result.add "\n    " & fname & "*: " & toNimType(field.typ)
+type
+  TlField = object
+    name: string
+    typ: string
+  
+  TlObj = object
+    name: string
+    fields: seq[TlField]
+  
+  TlClass = object
+    objs: seq[TlObj]
+
+var tabl = newTable[string, TlClass]()
+
+when false:
+  proc makeNimType(): string = 
+    result = fmt"  {hdr.name} = object of TlBase"
+    for field in fields:
+      var fname = field.name
+      if fname == "type": fname = "`" & fname & "`"
+      result.add "\n    " & fname & "*: " & toNimType(field.typ)
 
 import npeg, tables
-
-
-
-var tabl = newTable[(string, string), seq[tuple[name, typ: string]]]()
 
 var pairs: seq[tuple[name, typ: string]]
 
@@ -49,20 +77,29 @@ let parser = peg("tl"):
 
   lets <- (Alnum | {'_', '<', '>'})
 
-
   comment <- "//" * *(Print - '\n') * *'\n'
   
   typ <- >+lets * ":" * >+lets:
+    # Save name:type for that pair
     pairs.add(($1, $2))
 
 
   typedef <- >+lets * " " * *(typ * " ") * "=" * ?S * >+lets * ";" * *'\n':
     let curName = $1
     let class = $2
-    if (curName, class) notin tabl:
-      tabl[(curName, class)] = @[]
+
+    if class notin tabl:
+      tabl[class] = TlClass()
+    
+    var fields: seq[TlField]
+
+    # Add pairs for the current object
     for x in pairs:
-      tabl[(curName, class)].add (x.name, toNimType(x.typ))
+      fields.add TlField(name: x.name, typ: toNimType(x.typ))
+    
+    # Add new object to the class
+    tabl[class].objs.add TlObj(name: curName, fields: fields)
+    # Clean pairs sequence
     pairs = @[]
 
   tl <- ?nl * *(comment | typedef) * ?nl
@@ -70,10 +107,39 @@ let parser = peg("tl"):
 let datas = readFile("td_api.tl")
 
 let dd = parser.match(datas)
+
+proc findType(name: string): string = 
+  for clsName, class in tabl:
+    for obj in class.objs:
+      if obj.name == name:
+        return clsName
+  name
+
+proc processField(name: string): string = 
+  # Escape `type` because it's a keyword
+  var name = if name == "type": "`type`" else: name
+  let camel = toCamelCase(name)
+  if camel == name:
+    name & "*"
+  else:
+    &"{camel}* {{.jsonName: \"{name}\".}}"
+
 echo "type"
-echo """  TlBase = object of RootObj
-    `@type`: string
-"""
-for key, val in tabl:
-  echo makeNimType(key, val)
-  echo ""
+
+for clsName, class in tabl:
+  # Simple - use class name for the object,
+  # no need for any case objects
+  if class.objs.len == 1:
+    echo "  " & clsName & " = object"
+    # No reason to export kind for simple objects
+    # since we'll operate on Nim types after all
+    echo "    kind {.jsonName: \"@type\".}: string" 
+    for obj in class.objs:
+      for field in obj.fields:
+        let orig = field.name
+        let name = processField(orig)
+        # If camelCase and snake_case variants are identical
+        # (usually only happens for one-word names)
+        echo "    " & name & ": " & field.typ
+    echo ""
+    echo ""
