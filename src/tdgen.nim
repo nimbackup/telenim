@@ -113,30 +113,70 @@ proc processType(name: string): string =
       name
 
 proc processField(name: string): string = 
-  # Escape `type` because it's a keyword
-  var name = if name == "type": "`type`" else: name
+  # Use "typ" instead of "type" because why not
+  var name = if name == "type": "typ" else: name
   let camel = toCamelCase(name)
   if camel == name:
     name & "*"
   else:
     &"{camel}* {{.jsonName: \"{name}\".}}"
 
-echo "type"
+proc makeSingleObj(clsName: string, obj: TlObj): string = 
+  result.add "  " & clsName & " = object\n"
+  # No reason to export kind for simple objects
+  # since we'll operate on Nim types after all
+  result.add "    kind {.jsonName: \"@type\".}: string\n" 
+  for field in obj.fields:
+    let name = processField(field.name)
+    let typ = processType(field.typ)
+    # If camelCase and snake_case variants are identical
+    # (usually only happens for one-word names)
+    result.add "    " & name & ": " & typ & "\n"
 
+proc abbreviate(cls, name: string): string =
+  # Given class name and object name, makes a shorthand
+  # abbreviation for the object kind in enum
+  # E.g. given "NetworkType", "networkTypeMobileRoaming"
+  # returns "ntMobileRoaming"
+  let lowercls = cls[0].toLowerAscii() & cls[1..^1]
+  var abbrv = ""
+  for chr in cls:
+    if chr in {'A' .. 'Z'}:
+      abbrv.add chr.toLowerAscii()
+  result = abbrv & name.replace(lowercls, "")
+
+proc makeCaseObj(clsName: string, objs: seq[TlObj]): string = 
+  var enumvals = newTable[string, string]()
+  for obj in objs:
+    enumvals[obj.name] = abbreviate(clsName, obj.name)
+  let enumName = clsName & "Kind"
+  result.add "  " & enumName & " = enum\n"
+
+  for key, val in enumvals:
+    result.add fmt"    {val} = " & '"' & key & "\"," & "\n"
+  result.add "\n"
+  result.add "  " & clsName & " = object\n"
+  # No reason to export kind for simple objects
+  # since we'll operate on Nim types after all
+  if objs.len > 0:
+    result.add "    case kind* {.jsonName: \"@type\".}: " & enumName & "\n"
+  for obj in objs:
+    result.add "    of " & enumvals[obj.name] & ":\n"
+    if obj.fields.len == 0: 
+      result.add "      discard\n"
+      continue
+    for field in obj.fields:
+      let name = processField(field.name)
+      let typ = processType(field.typ)
+      # If camelCase and snake_case variants are identical
+      # (usually only happens for one-word names)
+      result.add "      " & name & ": " & typ & "\n"
+
+echo "type"
 for clsName, class in tabl:
   # Simple - use class name for the object,
   # no need for any case objects
   if class.objs.len == 1:
-    echo "  " & clsName & " = object"
-    # No reason to export kind for simple objects
-    # since we'll operate on Nim types after all
-    echo "    kind {.jsonName: \"@type\".}: string" 
-    for obj in class.objs:
-      for field in obj.fields:
-        let name = processField(field.name)
-        let typ = processType(field.typ)
-        # If camelCase and snake_case variants are identical
-        # (usually only happens for one-word names)
-        echo "    " & name & ": " & typ
-    echo ""
-    echo ""
+    echo makeSingleObj(clsName, class.objs[0])
+  else:
+    echo makeCaseObj(clsName, class.objs)
