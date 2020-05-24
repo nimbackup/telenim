@@ -21,29 +21,6 @@ func toCamelCase*(str: string, firstUpper = false): string =
     else:
       result.add(c)
 
-proc toNimType(data: string): string = 
-  # https://core.telegram.org/tdlib/docs/td__json__client_8h.html
-  result = case data
-  of "int32": "int32"
-  # max int value which can fit into json
-  of "int53": "int64"
-  # use strings there
-  of "int64": "string"
-  # base64 encoded - need to decode
-  of "bytes": "string"
-  of "Bool": "bool"
-  of "string": "string"
-  of "double": "float"
-  else:
-    # Handle vectors of vectors and just vectors (recursively)
-    var vectype: string
-    if scanf(data, "vector<vector<$+>>", vectype):
-      "seq[seq[" & toNimType(vectype) & "]]"
-    elif scanf(data, "vector<$+>", vectype):
-      "seq[" & toNimType(vectype) & "]"
-    else:
-      data
-
 type
   TlField = object
     name: string
@@ -95,7 +72,7 @@ let parser = peg("tl"):
 
     # Add pairs for the current object
     for x in pairs:
-      fields.add TlField(name: x.name, typ: toNimType(x.typ))
+      fields.add TlField(name: x.name, typ: x.typ)
     
     # Add new object to the class
     tabl[class].objs.add TlObj(name: curName, fields: fields)
@@ -108,12 +85,32 @@ let datas = readFile("td_api.tl")
 
 let dd = parser.match(datas)
 
-proc findType(name: string): string = 
+proc processType(name: string): string = 
+  # https://core.telegram.org/tdlib/docs/td__json__client_8h.html
   for clsName, class in tabl:
     for obj in class.objs:
       if obj.name == name:
         return clsName
-  name
+  result = case name
+  of "int32": "int32"
+  # max int value which can fit into json
+  of "int53": "int64"
+  # use strings there
+  of "int64": "string"
+  # base64 encoded - need to decode
+  of "bytes": "string"
+  of "Bool": "bool"
+  of "string": "string"
+  of "double": "float"
+  else:
+    # Handle vectors of vectors and just vectors (recursively)
+    var vectype: string
+    if scanf(name, "vector<vector<$+>>", vectype):
+      "seq[seq[" & processType(vectype) & "]]"
+    elif scanf(name, "vector<$+>", vectype):
+      "seq[" & processType(vectype) & "]"
+    else:
+      name
 
 proc processField(name: string): string = 
   # Escape `type` because it's a keyword
@@ -136,10 +133,10 @@ for clsName, class in tabl:
     echo "    kind {.jsonName: \"@type\".}: string" 
     for obj in class.objs:
       for field in obj.fields:
-        let orig = field.name
-        let name = processField(orig)
+        let name = processField(field.name)
+        let typ = processType(field.typ)
         # If camelCase and snake_case variants are identical
         # (usually only happens for one-word names)
-        echo "    " & name & ": " & field.typ
+        echo "    " & name & ": " & typ
     echo ""
     echo ""
