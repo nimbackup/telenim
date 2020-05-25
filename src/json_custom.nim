@@ -4,7 +4,7 @@
 # we can make a PR to the json module in stdlib to implement
 # the same functionality
 import json, tables, macros, options, strutils
-export json
+export json, options
 
 template jsonName*(name: string) {.pragma.}
 
@@ -188,7 +188,7 @@ proc findPragmaExprForFieldSym(arg: NimNode, fieldSym: NimNode): NimNode =
     if eqIdent(ident, fieldSym):
       return arg[1]
   else:
-    error("illegal arg: ", arg)
+    return
 
 proc getPragmaName(sym: NimNode, name = "jsonName"): (bool, string) = 
   let pragma = findPragmaExprForFieldSym(sym.owner.getImpl()[2][2], sym)
@@ -233,7 +233,6 @@ proc foldObjectBody(dst, typeNode, tmpSym, jsonNode, jsonPath, originalJsonPathL
 
   of nnkRecCase:
     let kindSym = typeNode[0][0]
-
     var name = kindSym.strVal
     let maybePragma = getPragmaName(kindSym)
     if maybePragma[0]: name = maybePragma[1]
@@ -296,6 +295,7 @@ macro assignObjectImpl[T](dst: var T; jsonNode: JsonNode; jsonPath: var string) 
     foldObjectBody(result, typeSym, dst, jsonNode, jsonPath, originalJsonPathLen)
   else:
     foldObjectBody(result, typeSym.getTypeImpl, dst, jsonNode, jsonPath, originalJsonPathLen)
+  echo repr result
 
 proc initFromJson[T : object|tuple](dst: var T; jsonNode: JsonNode; jsonPath: var string) =
   assignObjectImpl(dst, jsonNode, jsonPath)

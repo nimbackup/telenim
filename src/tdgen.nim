@@ -1,9 +1,10 @@
-# I know this code is really far from perfect,
+# I know this code is really, really far from perfect,
 # maybe I should've used macros to properly operate on AST instead
 # of strings, but the thing is that we don't need to generate definitions
 # every day, we just need to generate them *once* for one tdlib version
 # so this code is pretty rough and it's made to complete that task
-import parseutils, strutils, strformat, strscans, tables
+import parseutils, strutils, strformat, strscans, tables, sequtils, algorithm
+import sugar
 
 let data = open("td_api.tl", fmRead)
 
@@ -87,6 +88,8 @@ let dd = parser.match(datas)
 
 proc processType(name: string): string = 
   # https://core.telegram.org/tdlib/docs/td__json__client_8h.html
+  # We replace individual object names with base class name
+  # since we currently use case objects
   for clsName, class in tabl:
     for obj in class.objs:
       if obj.name == name:
@@ -112,14 +115,13 @@ proc processType(name: string): string =
     else:
       name
 
-proc processField(name: string): string = 
+proc processField(nimName, jsonName: string): string = 
   # Use "typ" instead of "type" because why not
-  var name = if name == "type": "typ" else: name
-  let camel = toCamelCase(name)
-  if camel == name:
-    name & "*"
-  else:
-    &"{camel}* {{.jsonName: \"{name}\".}}"
+  var name = if nimName == "type": "typ" else: nimName
+  # workaround for syntax highlighting being broken (in my editor).
+  # yes, really.
+  let nameq = '"' & jsonName & '"'
+  &"{name}* {{.jsonName: {nameq}.}}"
 
 proc makeSingleObj(clsName: string, obj: TlObj): string = 
   result.add "  " & clsName & " = object\n"
@@ -127,56 +129,103 @@ proc makeSingleObj(clsName: string, obj: TlObj): string =
   # since we'll operate on Nim types after all
   result.add "    kind {.jsonName: \"@type\".}: string\n" 
   for field in obj.fields:
-    let name = processField(field.name)
+    let name = processField(field.name.toCamelCase(), field.name)
     let typ = processType(field.typ)
     # If camelCase and snake_case variants are identical
     # (usually only happens for one-word names)
     result.add "    " & name & ": " & typ & "\n"
 
-proc abbreviate(cls, name: string): string =
+proc commonPrefixUtil(a, b: string): string = 
+  for i in 0 ..< min(a.len, b.len):
+    if a[i] == b[i]:
+      result.add a[i]
+    else:
+      break
+
+proc commonPrefix(data: seq[string]): string = 
+  result = data[0]
+  for i in 1 ..< data.len:
+    result = commonPrefixUtil(result, data[i])
+
+proc abbreviate(names: seq[string], obj: string): string =
   # Given class name and object name, makes a shorthand
   # abbreviation for the object kind in enum
   # E.g. given "NetworkType", "networkTypeMobileRoaming"
   # returns "ntMobileRoaming"
-  let lowercls = cls[0].toLowerAscii() & cls[1..^1]
-  var abbrv = ""
-  for chr in cls:
-    if chr in {'A' .. 'Z'}:
-      abbrv.add chr.toLowerAscii()
-  result = abbrv & name.replace(lowercls, "")
+  # find the common prefix
+  let prefix = commonPrefix(names)
+  # uppercase first letter in it
+  let prefix2 = prefix[0].toUpperAscii() & prefix[1..^1]
+  # only get uppercase letters from the prefix for the abbreviation
+  for c in prefix2:
+    if c in {'A' .. 'Z'}:
+      result.add c.toLowerAscii()
+  # add object name without common prefix
+  result.add obj.replace(prefix, "")
+
+proc getSuffix(clsName, objname, abrev: string): string = 
+  let suff = objname.replace(clsname[0].toLowerAscii() & clsname[1..^1], "")
+  result = suff[0..min(3, suff.len - 1)].toLowerAscii()
+
+proc uniquate(clsName, objName, field: string): string = 
+  # clsName -> Update, objName -> updateNewMessage
+  let clslower = clsName[0].toLowerAscii() & clsName[1..^1] # update
+  let suff = objName.replace(clslower, "") # NewMessage
+  result = ""
+  for c in suff:
+    if c in {'A' .. 'Z'}:
+      result.add c.toLowerAscii()
+  if result.len == 1:
+    result = objName[0..^3].toLowerAscii()
+  # result -> nm
+  result.add field.toUpperAscii()[0] & field[1..^1]
+  # result -> nmChatId
 
 proc makeCaseObj(clsName: string, objs: seq[TlObj]): string = 
   var enumvals = newTable[string, string]()
   for obj in objs:
-    enumvals[obj.name] = abbreviate(clsName, obj.name)
+    enumvals[obj.name] = abbreviate(objs.mapIt(it.name), obj.name)
+  # enum name
   let enumName = clsName & "Kind"
   result.add "  " & enumName & " = enum\n"
-
+  # enum members
   for key, val in enumvals:
     result.add fmt"    {val} = " & '"' & key & "\"," & "\n"
   result.add "\n"
+  # object name
   result.add "  " & clsName & " = object\n"
-  # No reason to export kind for simple objects
-  # since we'll operate on Nim types after all
-  if objs.len > 0:
-    result.add "    case kind* {.jsonName: \"@type\".}: " & enumName & "\n"
+  # kind field for the object variant
+  result.add "    case kind* {.jsonName: \"@type\".}: " & enumName & "\n"
   for obj in objs:
+    # generate branch
     result.add "    of " & enumvals[obj.name] & ":\n"
+    # empty branch - no fields
     if obj.fields.len == 0: 
       result.add "      discard\n"
       continue
     for field in obj.fields:
-      let name = processField(field.name)
+      let uniqName = uniquate(clsName, obj.name, toCamelCase(field.name))
+      let name = processField(uniqName, field.name)
       let typ = processType(field.typ)
-      # If camelCase and snake_case variants are identical
-      # (usually only happens for one-word names)
       result.add "      " & name & ": " & typ & "\n"
 
-echo "type"
+echo "import src/json_custom\ntype\n"
 for clsName, class in tabl:
-  # Simple - use class name for the object,
-  # no need for any case objects
   if class.objs.len == 1:
     echo makeSingleObj(clsName, class.objs[0])
   else:
     echo makeCaseObj(clsName, class.objs)
+
+# clsName = Update
+# obj.name = updateNewMessage
+# enumvals[obj.name] - uNewMessage
+# field.name = message
+# result -> nmMessage
+# clslower = clsName[0].toLowerAscii() & clsName[1..^1] # update
+# suff = obj.name.replace(clslower, "") # NewMessage
+# abbrv = ""
+# for c in suff:
+#   if c in {'A' .. 'Z'}:
+#     abbrv.add c.toLowerAscii()
+# abbrv -> nm
+# name = abbrv & field.name[0].toUpperAscii() & field.name[1..^1]
