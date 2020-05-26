@@ -1,5 +1,6 @@
 import json, os, strformat, asyncdispatch, strutils
-import out
+
+import tdlib_types
 const
   tdlib = "lib" / "libtdjson.so(|.1.6.0)"
 
@@ -192,11 +193,10 @@ proc main {.async.} =
 
   while true:
     let event = await client.getEvent()
-    try:
+    if event["@type"].getStr().startsWith "update":
       let a = event.toCustom(Update)
-    except:
-      echo event["@type"].getStr()
-      echo event.pretty()
+    else:
+      echo event["@type"]
     asyncCheck client.handleEvent(event)
 
 waitFor main()

@@ -2,7 +2,6 @@ import json_custom, options, json
 export json_custom, options, json
 
 type
-
   PollOption * = object
     ## Describes one answer option of a poll
     kind {.jsonName: "@type".}: string
