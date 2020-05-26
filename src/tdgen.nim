@@ -3,6 +3,11 @@
 # of strings, but the thing is that we don't need to generate definitions
 # every day, we just need to generate them *once* for one tdlib version
 # so this code is pretty rough and it's made to complete that task
+# TODO:
+# - How do make comments for different branches of an object variant?
+# - A few name conflicts in object variants with a lot of branches, maybe detect that
+# somehow?
+
 import parseutils, strutils, strformat, strscans, tables, sequtils, algorithm
 import sugar
 
@@ -52,6 +57,8 @@ import npeg, tables
 
 var pairs: seq[tuple[name, typ: string]]
 var comments = newTable[string, string]()
+var classComment = ""
+var inClass = false
 
 let parser = peg("tl"):
   S <- {'\9'..'\13',' '}
@@ -61,7 +68,16 @@ let parser = peg("tl"):
   lets <- (Alnum | {'_', '<', '>'})
 
   entry <- >*lets * " " * >*(Print - {'\n', '@'}):
-    comments[$1] = ($2).strip()
+    let (name, val) = ($1, $2)
+    # Special handling for class description because otherwise
+    # it would get shadowed by following type declarations
+    if name == "class":
+      inClass = true
+    elif name == "description" and inClass:
+      classComment = val
+      inClass = false
+    else:
+      comments[name] = val.strip()
 
   doccomment <- "//" * "@" * *(entry * ?"@") * *'\n'
   
@@ -76,8 +92,7 @@ let parser = peg("tl"):
     let class = $2
 
     if class notin tabl:
-      let comm = comments.getOrDefault("class")
-      tabl[class] = TlClass(comment: comm)
+      tabl[class] = TlClass(comment: classComment)
     
     var fields: seq[TlField]
 
