@@ -1,7 +1,4 @@
-import json, os, asyncdispatch, strutils
-
-import telenim/types
-export types
+import json, os, asyncdispatch, strutils, tables
 
 const
   tdlib = "lib" / "libtdjson.so(|.1.6.0)"
@@ -24,10 +21,14 @@ type
   TdlibClientObj = object
     alive: bool
     impl: pointer
+    counter*: int
   
   TdlibClient* = ref TdlibClientObj
 
-proc send*(client: TdlibClient, query: JsonNode) =
+proc send*(client: TdlibClient, query: sink JsonNode, counter = true) =
+  if counter:
+    query["@extra"] = newJString($client.counter)
+    inc client.counter
   td_json_client_send(client.impl, $query)
 
 proc receive*(client: TdlibClient, timeout: float): JsonNode =
@@ -75,3 +76,5 @@ proc getEvent*(client: TdlibClient): Future[JsonNode] {.async.} =
     if event.dataAvailable:
       return event.msg
     await sleepAsync(1)
+
+include telenim/types

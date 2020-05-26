@@ -191,7 +191,10 @@ proc findPragmaExprForFieldSym(arg: NimNode, fieldSym: NimNode): NimNode =
     return
 
 proc getPragmaName(sym: NimNode, name = "jsonName"): (bool, string) = 
-  let pragma = findPragmaExprForFieldSym(sym.owner.getImpl()[2][2], sym)
+  let owner = sym.owner.getImpl()[2]
+  if owner.len < 3:
+    return
+  let pragma = findPragmaExprForFieldSym(owner[2], sym)
   if pragma.kind == nnkPragma and $pragma[0][0] == name:
     result = (true, pragma[0][1].strVal)
 

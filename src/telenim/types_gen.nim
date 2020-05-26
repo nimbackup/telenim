@@ -35,6 +35,7 @@ type
     name: string
     typ: string
     comment: string
+    # True if there's "may be null" in the comment
     maybeNull: bool
   
   TlObj = object
@@ -43,7 +44,15 @@ type
     comment: string
   
   TlClass = object
+    # Objects which inherit from that class
     objs: seq[TlObj]
+    # Comment for the class itself
+    comment: string
+  
+  TlFunction = object
+    params: seq[TlField]
+    # Return value of the function is always a class
+    retVal: string
     comment: string
 
 func toCamelCase*(str: string, firstUpper = false): string =
@@ -58,11 +67,13 @@ func toCamelCase*(str: string, firstUpper = false): string =
       result.add(c)
 
 
-var tabl = newTable[string, TlClass]()
+var classes = newTable[string, TlClass]()
+var functions = newTable[string, TlFunction]()
 var pairs: seq[tuple[name, typ: string]]
 var comments = newTable[string, string]()
 var classComment = ""
 var inClass = false
+var inFunctions = false
 
 let parser = peg("tl"):
   S <- {'\9'..'\13',' '}
@@ -86,6 +97,10 @@ let parser = peg("tl"):
   doccomment <- "//" * "@" * *(entry * ?"@") * *'\n'
   
   comment <- "//" * *(Print - '\n') * *'\n'
+
+  funsection <- "---functions---" * *'\n':
+    inFunctions = true
+    inClass = false
   
   typ <- >+lets * ":" * >+lets:
     # Save name:type for that pair
@@ -94,10 +109,13 @@ let parser = peg("tl"):
   typedef <- >+lets * " " * *(typ * " ") * "=" * ?S * >+lets * ";" * *'\n':
     let curName = $1
     let class = $2
-
-    if class notin tabl:
-      tabl[class] = TlClass(comment: classComment)
-      classComment = ""
+    # XXX: Do we need the second check at all?
+    if not inFunctions:
+      if class notin classes:
+        classes[class] = TlClass(comment: classComment)
+        classComment = ""
+    else:
+      functions[curName] = TlFunction(retVal: class)
     
     var fields: seq[TlField]
 
@@ -113,22 +131,26 @@ let parser = peg("tl"):
     
     # Add new object to the class
     let comm = comments.getOrDefault("description")
-    tabl[class].objs.add TlObj(name: curName, fields: fields, comment: comm)
+    if not inFunctions:
+      classes[class].objs.add TlObj(name: curName, fields: fields, comment: comm)
+    else:
+      functions[curName].params = fields
+      functions[curName].comment = comm
     # Clean pairs sequence
     pairs = @[]
     comments = newTable[string, string]()
 
-  tl <- ?nl * *(doccomment | comment | typedef) * ?nl
+  tl <- ?nl * *(doccomment | comment | typedef | funsection) * ?nl
 
 let data = readFile("td_api.tl")
-
-let dd = parser.match(data)
+let match = parser.match(data)
+doAssert match.ok == true
 
 proc processType(name: string, maybeNull: bool): string = 
   # https://core.telegram.org/tdlib/docs/td__json__client_8h.html
   # We replace individual object names with base class name
   # since we currently use case objects
-  for clsName, class in tabl:
+  for clsName, class in classes:
     for obj in class.objs:
       if obj.name == name:
         result = if maybeNull: &"Option[{clsName}]" else: clsName
@@ -279,11 +301,152 @@ outFile.writeLine fmt"""
 # td_api.tl sha1sum - {toLowerAscii $secureHash("data")}
 # Git hash - {gitRev}
 """
-outFile.writeLine "import json_custom, options, json"
+outFile.writeLine "import json_custom, options, json, tables"
 outFile.writeLine "export json_custom, options, json"
 outFile.writeLine "\ntype"
-for clsName, class in tabl:
+for clsName, class in classes:
   if class.objs.len == 1:
     outFile.writeLine makeSingleObj(clsName, class)
   else:
     outFile.writeLine makeCaseObj(clsName, class)
+
+proc makeFunctions(): string = 
+  result.add "  TdlibFutureKind = enum\n"
+  # func return val -> enum member
+  var enumvals = newTable[string, string]()
+  # enum
+  for name, fun in functions:
+    if fun.retVal in enumvals: continue
+
+    enumvals[fun.retVal] = "tf" & fun.retVal
+    result.add "    " & enumvals[fun.retVal] & ",\n"
+
+  result.add "\n  TdlibFuture = ref object\n"
+  result.add "    case kind: TdlibFutureKind\n"
+  # object variant
+  for retVal, enumVal in enumvals:
+    result.add "    of " & enumVal & ":"
+    result.add " " & retVal.toLowerAscii() & ": " & retVal & "\n"
+  result.add """
+  TdlibEntry = tuple
+    kind: TdlibFutureKind
+    fut: Future[TdlibFuture]
+# TODO: Is this the best/most efficient way?
+var futs = newTable[int, TdlibEntry]()
+
+template waitFut(client, kind, field: untyped): untyped = 
+  let fut = newFuture[TdlibFuture]()
+  futs[client.counter] = (kind, fut)
+  let tdlibFut = await fut
+  tdlibFut.field
+
+proc completeFut(event: sink JsonNode) = 
+  # TODO: Ideally this check shouldn't be there and *all* events we receive
+  # should have that field (except updates of course)
+  if "@extra" notin event:
+    return
+  # Get the index of the future
+  let idx = parseInt(event["@extra"].getStr())
+  event.delete("@extra")
+  let waitingFut = futs[idx]
+  var completedFut = TdlibFuture(kind: waitingFut.kind)
+  case completedFut.kind
+"""
+
+#[
+  case completedFut.kind
+  of tfMessage:
+    completedFut.msg = event.toCustom(Message)
+  of tfSeconds:
+    completedFut.secs = event.toCustom(Seconds)
+  of tfOk:
+    discard
+]#
+
+  for retVal, enumVal in enumvals:
+    result.add "  of " & enumVal & ":\n"
+    result.add &"    completedFut.{retVal.toLowerAscii()} = event.toCustom({retVal})\n"
+
+  result.add """
+  futs.del(idx)
+  waitingFut.fut.complete completedFut
+
+"""
+
+  # functions
+  for name, fun in functions:
+    var procParams = @["client: TdlibClient"]
+    var jsonParams = @[fmt"""    "@type": "{name}" """]
+    for param in fun.params:
+      var name = toCamelCase(param.name).multiReplace({
+        "type": "typ", "method": "metod"
+      })
+
+      let typ = processType(param.typ, false)
+      if not param.maybeNull:
+        procParams.add fmt"{name}: {typ}"
+      else:
+        procParams.add fmt"{name} = none({typ})"
+      jsonParams.add fmt""""{param.name}": {name}"""
+    
+    let retType = processType(fun.retVal, false)
+    result.add "proc " & name & "*(" & procParams.join(", ")
+    result.add "): Future[" & retType & "] {.async.} = \n"
+    result.add "  ## " & fun.comment & "\n"
+    for field in fun.params:
+      result.add &"  ## **{field.name}** - {field.comment}\n" 
+    result.add "  client.send %*{\n"
+    # "@type": "editInlineMessageText"
+    result.add jsonParams.join(", \n    ")
+    result.add "\n  }\n"
+
+    #  result = client.waitFut(tfAuthorizationState, authorizationstate)
+    result.add "  result = client.waitFut(" & enumvals[fun.retVal] & ", "
+    result.add fun.retVal.toLowerAscii() & ")\n\n"
+
+outFile.writeLine makeFunctions()
+
+when false:
+  type
+    TdlibFutureKind = enum
+      tfMessage,
+      tfSeconds,
+      tfAuthorizationState
+      tfOk
+    
+    TdlibFuture = ref object
+      case kind: TdlibFutureKind
+      of tfMessage: 
+        message: Message
+      of tfSeconds: 
+        seconds: Seconds
+      of tfAuthorizationState:
+        authorizationstate: AuthorizationState
+      of tfOk: 
+        ok: Ok
+    
+    TdlibEntry = tuple
+      kind: TdlibFutureKind
+      fut: Future[TdlibFuture]
+
+  # TODO: Is this the best/most efficient way?
+  var futs = newTable[int, TdlibEntry]()
+
+  template waitFut(client, kind, field: untyped): untyped = 
+    let fut = newFuture[TdlibFuture]()
+    futs[client.counter] = (kind, fut)
+    let tdlibFut = await fut
+    tdlibFut.field
+
+  proc getAuthorizationState*(client: TdlibClient): Future[AuthorizationState] {.async.} = 
+    client.send %*{
+      "@type": "getAuthorizationState"
+    }
+    result = client.waitFut(tfAuthorizationState, authorizationstate)
+
+  proc setTdlibParameters*(client: TdlibClient, parameters: TdlibParameters): Future[Ok] {.async.} = 
+    client.send %*{
+      "@type": "setTdlibParameters",
+      "parameters": parameters
+    }
+    result = client.waitFut(tfOk, ok)

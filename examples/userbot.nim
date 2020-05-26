@@ -55,28 +55,11 @@ proc handleAuth(client: TdlibClient, update: Update): Future[bool] {.async.} =
   else:
     echo authState
 
-var globalFutCounter = 0
 import mathexpr, tables
 
-type
-  TdlibFutureKind = enum
-    tfMessage, tfOk
-  
-  TdlibFuture = ref object
-    case kind: TdlibFutureKind
-    of tfMessage: msg: Message
-    of tfOk: discard
-
-var futs = newSeq[tuple[kind: TdlibFutureKind, fut: Future[TdlibFuture]]]()
-
-template waitFut(kind, field: untyped): untyped = 
-  let fut = newFuture[TdlibFuture]()
-  futs.add (kind, fut)
-  inc globalFutCounter
-  let tdlibFut = await fut
-  tdlibFut.field
-
 proc editMsg(client: TdlibClient, msg: Message, text: string): Future[Message] {.async.} = 
+  discard
+  #[
   client.send(%*{
     "@type": "editMessageText",
     "chat_id": msg.chatId,
@@ -87,10 +70,10 @@ proc editMsg(client: TdlibClient, msg: Message, text: string): Future[Message] {
         "@type": "formattedText",
         "text": text
       }
-    },
-    "@extra": $globalFutCounter
+    }
   })
-  result = waitFut(tfMessage, msg)
+  result = client.waitFut(tfMessage, message)
+  ]#
 
 proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.} = 
   result = true
@@ -143,28 +126,32 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
     for part in 1 ..< parts.len:
       discard await client.editMsg(msg, parts[part])
       await sleepAsync(100)
+    discard await client.editMsg(msg, parts[1..^1].join(" "))
+  of "oof":
+    if parts.len < 2:
+      discard await client.editMsg(msg, "Usage: .oof {count: int}")
+    else:
+      var data = "oo"
+      for i in 0 .. parseInt(parts[1]):
+        discard await client.editMsg(msg, data & "f")
+        data &= "o"
+  of "repeat":
+    if parts.len < 3:
+      discard await client.editMsg(msg, "Usage: .repeat {message} {count:int}")
+    let cnt = parts[^1].parseInt()
+    #for i in 0 ..< cnt:
+    #  discard await client.send %*{
+    #    "@type": "sendMessage",
+  
+  of "chatid":
+    discard await client.editMsg(msg, "This chat's ID: " & $msg.chatId)
+  of "ping":
+    let ping = await client.pingProxy()
+    discard await client.editMsg(msg, $(ping.seconds * 1000))
 
 proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
   result = true
   let typ = event["@type"].getStr()
-  if "@extra" in event:
-    # Get the index of the future
-    let idx = parseInt(event["@extra"].getStr())
-    var data = event
-    data.delete("@extra")
-    let waitingFut = futs[idx]
-    var completedFut = TdlibFuture(kind: waitingFut.kind)
-
-    case completedFut.kind
-    of tfMessage:
-      completedFut.msg = data.toCustom(Message)
-    of tfOk: 
-      discard
-    
-    futs.del(idx)
-    dec globalFutCounter
-    
-    waitingFut.fut.complete completedFut
   # TODO: Is this check correct?
   if typ.startsWith("update"):
     let update = event.toCustom(Update)
@@ -175,7 +162,7 @@ proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
       result = await client.handleMsgUpdate(update)
     else:
       discard
-  
+  completeFut(event)
 
 proc main {.async.} =
   let client = newTdlibClient()
