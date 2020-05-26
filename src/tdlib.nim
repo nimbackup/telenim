@@ -117,6 +117,20 @@ proc handleAuth(client: TdlibClient, update: Update): Future[bool] {.async.} =
 
 import mathexpr
 
+template editLastMsg(client: TdlibClient, msg: string) = 
+  client.send(%*{
+    "@type": "editMessageText",
+    "chat_id": cid,
+    "message_id": mid,
+    "input_message_content": {
+      "@type": "inputMessageText",
+      "text": {
+        "@type": "formattedText",
+        "text": msg
+      }
+    }
+  })
+
 proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.} = 
   result = true
   # We only need to process our own messages
@@ -130,18 +144,16 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
   #echo event.pretty()
   case msgText
   of ".status":
-    client.send(%*{
-      "@type": "editMessageText",
-      "chat_id": cid,
-      "message_id": mid,
-      "input_message_content": {
-        "@type": "inputMessageText",
-        "text": {
-          "@type": "formattedText",
-          "text": "All up and running!"
-        }
-      }
-    })
+    client.editLastMsg("All up and running!")
+  of ".version":
+    const gitRev = 
+      if dirExists(".git") and gorgeEx("git status").exitCode == 0:
+        staticExec("git rev-parse HEAD")
+      else: "unknown"
+
+    client.editLastMsg fmt"""Nigram v0.1.0
+    Git hash - {gitRev}
+    Compiled on {CompileDate} {CompileTime}""".unindent
   else:
     discard
   if msgText.startsWith ".solve":
@@ -150,31 +162,9 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
     
     try:
       let res = e.eval(expr)
-      client.send(%*{
-        "@type": "editMessageText",
-        "chat_id": cid,
-        "message_id": mid,
-        "input_message_content": {
-          "@type": "inputMessageText",
-          "text": {
-            "@type": "formattedText",
-            "text": expr & " = " & $res
-          }
-        }
-      })
+      client.editLastMsg expr & " = " & $res
     except:
-      client.send(%*{
-        "@type": "editMessageText",
-        "chat_id": cid,
-        "message_id": mid,
-        "input_message_content": {
-          "@type": "inputMessageText",
-          "text": {
-            "@type": "formattedText",
-            "text": "Not a valid math expression!"
-          }
-        }
-      })
+      client.editLastMsg "Not a valid math expression!"
 
 proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
   result = true
