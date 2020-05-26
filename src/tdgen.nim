@@ -26,13 +26,17 @@ type
   TlField = object
     name: string
     typ: string
+    comment: string
+    maybeNull: bool
   
   TlObj = object
     name: string
     fields: seq[TlField]
+    comment: string
   
   TlClass = object
     objs: seq[TlObj]
+    comment: string
 
 var tabl = newTable[string, TlClass]()
 
@@ -47,6 +51,7 @@ when false:
 import npeg, tables
 
 var pairs: seq[tuple[name, typ: string]]
+var comments = newTable[string, string]()
 
 let parser = peg("tl"):
   S <- {'\9'..'\13',' '}
@@ -55,45 +60,59 @@ let parser = peg("tl"):
 
   lets <- (Alnum | {'_', '<', '>'})
 
+  entry <- >*lets * " " * >*(Print - {'\n', '@'}):
+    comments[$1] = ($2).strip()
+
+  doccomment <- "//" * "@" * *(entry * ?"@") * *'\n'
+  
   comment <- "//" * *(Print - '\n') * *'\n'
   
   typ <- >+lets * ":" * >+lets:
     # Save name:type for that pair
     pairs.add(($1, $2))
 
-
   typedef <- >+lets * " " * *(typ * " ") * "=" * ?S * >+lets * ";" * *'\n':
     let curName = $1
     let class = $2
 
     if class notin tabl:
-      tabl[class] = TlClass()
+      let comm = comments.getOrDefault("class")
+      tabl[class] = TlClass(comment: comm)
     
     var fields: seq[TlField]
 
     # Add pairs for the current object
     for x in pairs:
-      fields.add TlField(name: x.name, typ: x.typ)
+      let comm = comments.getOrDefault(x.name)
+      fields.add TlField(
+        name: x.name,
+        typ: x.typ,
+        comment: comm,
+        maybeNull: "may be null" in comm
+      )
     
     # Add new object to the class
-    tabl[class].objs.add TlObj(name: curName, fields: fields)
+    let comm = comments.getOrDefault("description")
+    tabl[class].objs.add TlObj(name: curName, fields: fields, comment: comm)
     # Clean pairs sequence
     pairs = @[]
+    comments = newTable[string, string]()
 
-  tl <- ?nl * *(comment | typedef) * ?nl
+  tl <- ?nl * *(doccomment | comment | typedef) * ?nl
 
 let datas = readFile("td_api.tl")
 
 let dd = parser.match(datas)
 
-proc processType(name: string): string = 
+proc processType(name: string, maybeNull: bool): string = 
   # https://core.telegram.org/tdlib/docs/td__json__client_8h.html
   # We replace individual object names with base class name
   # since we currently use case objects
   for clsName, class in tabl:
     for obj in class.objs:
       if obj.name == name:
-        return clsName
+        result = if maybeNull: &"Option[{clsName}]" else: clsName
+        return
   result = case name
   of "int32": "int32"
   # max int value which can fit into json
@@ -109,11 +128,13 @@ proc processType(name: string): string =
     # Handle vectors of vectors and just vectors (recursively)
     var vectype: string
     if scanf(name, "vector<vector<$+>>", vectype):
-      "seq[seq[" & processType(vectype) & "]]"
+      "seq[seq[" & processType(vectype, false) & "]]"
     elif scanf(name, "vector<$+>", vectype):
-      "seq[" & processType(vectype) & "]"
+      "seq[" & processType(vectype, false) & "]"
     else:
       name
+  if maybeNull:
+    result = &"Option[{result}]" 
 
 proc processField(nimName, jsonName: string): string = 
   # Use "typ" instead of "type" because why not
@@ -122,18 +143,6 @@ proc processField(nimName, jsonName: string): string =
   # yes, really.
   let nameq = '"' & jsonName & '"'
   &"{name}* {{.jsonName: {nameq}.}}"
-
-proc makeSingleObj(clsName: string, obj: TlObj): string = 
-  result.add "  " & clsName & " = object\n"
-  # No reason to export kind for simple objects
-  # since we'll operate on Nim types after all
-  result.add "    kind {.jsonName: \"@type\".}: string\n" 
-  for field in obj.fields:
-    let name = processField(field.name.toCamelCase(), field.name)
-    let typ = processType(field.typ)
-    # If camelCase and snake_case variants are identical
-    # (usually only happens for one-word names)
-    result.add "    " & name & ": " & typ & "\n"
 
 proc commonPrefixUtil(a, b: string): string = 
   for i in 0 ..< min(a.len, b.len):
@@ -169,6 +178,7 @@ proc getSuffix(clsName, objname, abrev: string): string =
 
 proc uniquate(clsName, objName, field: string): string = 
   # clsName -> Update, objName -> updateNewMessage
+  # field -> chatId
   let clslower = clsName[0].toLowerAscii() & clsName[1..^1] # update
   let suff = objName.replace(clslower, "") # NewMessage
   result = ""
@@ -181,24 +191,47 @@ proc uniquate(clsName, objName, field: string): string =
   result.add field.toUpperAscii()[0] & field[1..^1]
   # result -> nmChatId
 
-proc makeCaseObj(clsName: string, objs: seq[TlObj]): string = 
+proc makeSingleObj(clsName: string, class: TlClass): string =
+  let obj = class.objs[0]
+  result.add "  " & clsName & " = object\n"
+  if obj.comment != "":
+    result.add "    ## " & obj.comment & "\n"
+  # No reason to export kind for simple objects
+  # since we'll operate on Nim types after all
+  result.add "    kind {.jsonName: \"@type\".}: string\n" 
+  for field in obj.fields:
+    let name = processField(field.name.toCamelCase(), field.name)
+    let typ = processType(field.typ, field.maybeNull)
+    # If camelCase and snake_case variants are identical
+    # (usually only happens for one-word names)
+    let comment = if field.comment != "":
+      " ## " & field.comment
+    else: ""
+    result.add "    " & name & ": " & typ & comment & "\n"
+
+proc makeCaseObj(clsName: string, class: TlClass): string = 
+  let objs = class.objs
   var enumvals = newTable[string, string]()
   for obj in objs:
     enumvals[obj.name] = abbreviate(objs.mapIt(it.name), obj.name)
   # enum name
   let enumName = clsName & "Kind"
-  result.add "  " & enumName & " = enum\n"
+  result.add "  " & enumName & " {.pure.} = enum\n"
   # enum members
   for key, val in enumvals:
     result.add fmt"    {val} = " & '"' & key & "\"," & "\n"
   result.add "\n"
   # object name
   result.add "  " & clsName & " = object\n"
+  if class.comment != "":
+    result.add "    ## " & class.comment & "\n"
   # kind field for the object variant
   result.add "    case kind* {.jsonName: \"@type\".}: " & enumName & "\n"
   for obj in objs:
     # generate branch
     result.add "    of " & enumvals[obj.name] & ":\n"
+    if obj.comment != "":
+      result.add "      ## " & obj.comment & "\n"
     # empty branch - no fields
     if obj.fields.len == 0: 
       result.add "      discard\n"
@@ -206,26 +239,17 @@ proc makeCaseObj(clsName: string, objs: seq[TlObj]): string =
     for field in obj.fields:
       let uniqName = uniquate(clsName, obj.name, toCamelCase(field.name))
       let name = processField(uniqName, field.name)
-      let typ = processType(field.typ)
-      result.add "      " & name & ": " & typ & "\n"
+      let typ = processType(field.typ, field.maybeNull)
+      let comment = if field.comment != "":
+        " ## " & field.comment
+      else: ""
+      result.add "      " & name & ": " & typ & comment & "\n"
 
-echo "import src/json_custom\ntype\n"
+echo "import src/json_custom, options, json"
+echo "export json_custom, options, json"
+echo "\ntype\n"
 for clsName, class in tabl:
   if class.objs.len == 1:
-    echo makeSingleObj(clsName, class.objs[0])
+    echo makeSingleObj(clsName, class)
   else:
-    echo makeCaseObj(clsName, class.objs)
-
-# clsName = Update
-# obj.name = updateNewMessage
-# enumvals[obj.name] - uNewMessage
-# field.name = message
-# result -> nmMessage
-# clslower = clsName[0].toLowerAscii() & clsName[1..^1] # update
-# suff = obj.name.replace(clslower, "") # NewMessage
-# abbrv = ""
-# for c in suff:
-#   if c in {'A' .. 'Z'}:
-#     abbrv.add c.toLowerAscii()
-# abbrv -> nm
-# name = abbrv & field.name[0].toUpperAscii() & field.name[1..^1]
+    echo makeCaseObj(clsName, class)
