@@ -180,15 +180,14 @@ proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
   result = true
   let typ = event["@type"].getStr()
   if typ.startsWith("update"):
-    echo "trying to deserialize..."
-    echo event.pretty()
-    let update = event.toCustom(Update)
-    if update.kind == uAuthorizationState:
-      echo "before auth"
-      result = await client.handleAuth(update)
-    elif update.kind == uNewMessage:
-      echo "before new msg"
-      result = await client.handleMsgUpdate(update)
+    try:
+      let update = event.toCustom(Update)
+      if update.kind == uAuthorizationState:
+        result = await client.handleAuth(update)
+      elif update.kind == uNewMessage:
+        result = await client.handleMsgUpdate(update)
+    except:
+      echo event.pretty()
 
 proc getEvent(client: TdlibClient): Future[JsonNode] {.async.} = 
   # A loop which runs until it receives actual data
