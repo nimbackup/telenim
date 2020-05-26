@@ -295,7 +295,6 @@ macro assignObjectImpl[T](dst: var T; jsonNode: JsonNode; jsonPath: var string) 
     foldObjectBody(result, typeSym, dst, jsonNode, jsonPath, originalJsonPathLen)
   else:
     foldObjectBody(result, typeSym.getTypeImpl, dst, jsonNode, jsonPath, originalJsonPathLen)
-  echo repr result
 
 proc initFromJson[T : object|tuple](dst: var T; jsonNode: JsonNode; jsonPath: var string) =
   assignObjectImpl(dst, jsonNode, jsonPath)

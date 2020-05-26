@@ -78,7 +78,6 @@ proc newTdlibClient(loggingLevel = 1): TdlibClient =
 proc handleAuth(client: TdlibClient, event: JsonNode): Future[bool] {.async.} = 
   result = true
   let authState = event["authorization_state"]
-  echo authState.toCustom(AuthorizationState)
   case authState["@type"].getStr()
   of "authorizationStateClosed":
     result = false
@@ -194,8 +193,9 @@ proc main {.async.} =
   while true:
     let event = await client.getEvent()
     try:
-      echo event.toCustom(Update)
+      let a = event.toCustom(Update)
     except:
+      echo event["@type"].getStr()
       echo event.pretty()
     asyncCheck client.handleEvent(event)
 
