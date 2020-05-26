@@ -51,7 +51,7 @@ proc close*(x: TdlibClient) =
 
 proc tdlibProcess(client: (TdlibClient)) {.thread.} = 
   while true:
-    let event = client.receive(0.01)
+    let event = client.receive(0.001)
     if not event.isNil():
       passingChannel.send(event)
 
@@ -74,4 +74,4 @@ proc getEvent*(client: TdlibClient): Future[JsonNode] {.async.} =
     let event = passingChannel.tryRecv()
     if event.dataAvailable:
       return event.msg
-    await sleepAsync(10)
+    await sleepAsync(1)

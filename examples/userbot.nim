@@ -55,21 +55,42 @@ proc handleAuth(client: TdlibClient, update: Update): Future[bool] {.async.} =
   else:
     echo authState
 
-import mathexpr
+var globalFutCounter = 0
+import mathexpr, tables
 
-template editLastMsg(client: TdlibClient, msg: string) = 
+type
+  TdlibFutureKind = enum
+    tfMessage, tfOk
+  
+  TdlibFuture = ref object
+    case kind: TdlibFutureKind
+    of tfMessage: msg: Message
+    of tfOk: discard
+
+var futs = newSeq[tuple[kind: TdlibFutureKind, fut: Future[TdlibFuture]]]()
+
+template waitFut(kind, field: untyped): untyped = 
+  let fut = newFuture[TdlibFuture]()
+  futs.add (kind, fut)
+  inc globalFutCounter
+  let tdlibFut = await fut
+  tdlibFut.field
+
+proc editMsg(client: TdlibClient, msg: Message, text: string): Future[Message] {.async.} = 
   client.send(%*{
     "@type": "editMessageText",
-    "chat_id": cid,
-    "message_id": mid,
+    "chat_id": msg.chatId,
+    "message_id": msg.id,
     "input_message_content": {
       "@type": "inputMessageText",
       "text": {
         "@type": "formattedText",
-        "text": msg
+        "text": text
       }
-    }
+    },
+    "@extra": $globalFutCounter
   })
+  result = waitFut(tfMessage, msg)
 
 proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.} = 
   result = true
@@ -78,44 +99,83 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
     return
   let cid = msg.chatId
   let mid = msg.id
+  let replyId = msg.replyToMessageId
   let msgText = if msg.content.kind == mText:
     msg.content.messageteText.text else: ""
-  case msgText
-  of ".status":
-    client.editLastMsg("All up and running!")
-  of ".version":
+  if msgText.len == 0 or msgText[0] != '.':
+    return
+  let parts = msgText[1..^1].split(Whitespace)
+  if parts.len == 0: return
+  case parts[0]
+  of "status":
+    echo await client.editMsg(msg, "All up and running!")
+  of "version":
     const gitRev = 
       if dirExists(".git") and gorgeEx("git status").exitCode == 0:
         staticExec("git rev-parse HEAD")
       else: "unknown"
 
-    client.editLastMsg fmt"""Telenim v0.1.0
+    echo await client.editMsg(msg, fmt"""Telenim userbot example
     Git hash - {gitRev}
-    Compiled on {CompileDate} {CompileTime}""".unindent
-  else:
-    discard
-  if msgText.startsWith ".solve":
-    let expr = msgText.split(".solve ")[1]
+    Compiled on {CompileDate} {CompileTime}""".unindent)
+  of "solve":
+    let expr = parts[1..^1].join(" ")
     let e = newEvaluator()
     
     try:
       let res = e.eval(expr)
-      client.editLastMsg expr & " = " & $res
+      echo await client.editMsg(msg, expr & " = " & $res)
     except:
-      client.editLastMsg "Not a valid math expression!"
+      echo await client.editMsg(msg, "Not a valid math expression!")
+  of "count":
+    if parts.len < 2:
+      discard await client.editMsg(msg, "Usage: .count {to: int}")
+      return
+    let countTo = parts[1]
+    try:
+      let to = countTo.parseInt()
+      for i in 0 ..< to:
+        discard await client.editMsg(msg, fmt"{i}")
+
+    except:
+      discard await client.editMsg(msg, "Usage: .count {to: int}")
+  of "tell":
+    for part in 1 ..< parts.len:
+      discard await client.editMsg(msg, parts[part])
+      await sleepAsync(100)
 
 proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
   result = true
   let typ = event["@type"].getStr()
+  if "@extra" in event:
+    # Get the index of the future
+    let idx = parseInt(event["@extra"].getStr())
+    var data = event
+    data.delete("@extra")
+    let waitingFut = futs[idx]
+    var completedFut = TdlibFuture(kind: waitingFut.kind)
+
+    case completedFut.kind
+    of tfMessage:
+      completedFut.msg = data.toCustom(Message)
+    of tfOk: 
+      discard
+    
+    futs.del(idx)
+    dec globalFutCounter
+    
+    waitingFut.fut.complete completedFut
+  # TODO: Is this check correct?
   if typ.startsWith("update"):
-    try:
-      let update = event.toCustom(Update)
-      if update.kind == uAuthorizationState:
-        result = await client.handleAuth(update)
-      elif update.kind == uNewMessage:
-        result = await client.handleMsgUpdate(update)
-    except:
-      echo event.pretty()
+    let update = event.toCustom(Update)
+    case update.kind
+    of uAuthorizationState:
+      result = await client.handleAuth(update)
+    of uNewMessage:
+      result = await client.handleMsgUpdate(update)
+    else:
+      discard
+  
 
 proc main {.async.} =
   let client = newTdlibClient()
