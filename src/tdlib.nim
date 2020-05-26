@@ -133,7 +133,6 @@ template editLastMsg(client: TdlibClient, msg: string) =
 
 proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.} = 
   result = true
-  # We only need to process our own messages
   let msg = update.nmMessage
   if not msg.isOutgoing:
     return
@@ -151,7 +150,7 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
         staticExec("git rev-parse HEAD")
       else: "unknown"
 
-    client.editLastMsg fmt"""Nigram v0.1.0
+    client.editLastMsg fmt"""Telenim v0.1.0
     Git hash - {gitRev}
     Compiled on {CompileDate} {CompileTime}""".unindent
   else:
