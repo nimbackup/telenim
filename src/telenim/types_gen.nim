@@ -263,7 +263,7 @@ proc makeCaseObj(clsName: string, class: TlClass): string =
       else: ""
       result.add "      " & name & ": " & typ & comment & "\n"
 
-var outFile = open("tdlib_types.nim", fmWrite)
+var outFile = open("types.nim", fmWrite)
 
 import std/[times, sha1, os]
 
