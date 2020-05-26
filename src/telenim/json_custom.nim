@@ -6,6 +6,7 @@
 import json, tables, macros, options, strutils
 export json, options
 
+
 template jsonName*(name: string) {.pragma.}
 
 macro isRefSkipDistinct(arg: typed): untyped =
@@ -191,12 +192,26 @@ proc findPragmaExprForFieldSym(arg: NimNode, fieldSym: NimNode): NimNode =
     return
 
 proc getPragmaName(sym: NimNode, name = "jsonName"): (bool, string) = 
-  let owner = sym.owner.getImpl()[2]
-  if owner.len < 3:
-    return
-  let pragma = findPragmaExprForFieldSym(owner[2], sym)
+  var owner = sym.owner.getImpl()[2]
+  if owner.len == 3:
+    owner = owner[2]
+  elif owner.len == 1 and owner.kind == nnkRefTy and owner[0].kind == nnkObjectTy:
+    owner = owner[0][2]
+  else:
+    echo treeRepr owner
+    error("error!")
+  let pragma = findPragmaExprForFieldSym(owner, sym)
   if pragma.kind == nnkPragma and $pragma[0][0] == name:
     result = (true, pragma[0][1].strVal)
+  if not result[0]:
+    echo "---------------------------------------"
+
+    echo treeRepr owner
+    echo "-----------------sym repr :"
+    echo repr sym
+    echo "--------------------sym impl:"
+    echo treerepr sym.owner.getImpl()
+    error("error!")
 
 proc foldObjectBody(dst, typeNode, tmpSym, jsonNode, jsonPath, originalJsonPathLen: NimNode): void {.compileTime.} =
   case typeNode.kind

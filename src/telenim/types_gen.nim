@@ -336,7 +336,7 @@ var futs = newTable[int, TdlibEntry]()
 
 template waitFut(client, kind, field: untyped): untyped = 
   let fut = newFuture[TdlibFuture]()
-  futs[client.counter] = (kind, fut)
+  futs[client.counter-1] = (kind, fut)
   let tdlibFut = await fut
   tdlibFut.field
 
@@ -404,7 +404,42 @@ proc completeFut(event: sink JsonNode) =
     result.add "  result = client.waitFut(" & enumvals[fun.retVal] & ", "
     result.add fun.retVal.toLowerAscii() & ")\n\n"
 
+proc makeConstructors(): string = 
+  for clsName, class in classes:
+    for obj in class.objs:
+      var params = newSeq[string]()
+      for field in obj.fields:
+        let name = toCamelCase(field.name).multiReplace({
+          "type": "typ", "method": "metod", "result": "res"
+        })
+
+        let typ = processType(field.typ, false)
+        if not field.maybeNull:
+          params.add fmt"{name}: {typ}"
+        else:
+          params.add fmt"{name} = none({typ})"
+      # Sort so that optional parameters are in the end
+      proc optCompare(a, b: string): int = 
+        if "none" in a: 1
+        elif "none" in b: -1
+        elif a == b: 0
+        else: -1
+      params.sort(optCompare)
+      let typ = processType(clsName, false)
+      result.add &"proc {obj.name}*(" & params.join(", ") & &"): JsonNode = \n"
+      result.add "  result = %*{\n"
+      var toAdd = @[&"    \"@type\": \"{obj.name}\""]
+      for field in obj.fields:
+        let name = toCamelCase(field.name).multiReplace({
+          "type": "typ", "method": "metod", "result": "res"
+        })
+        toAdd.add &"\"{field.name}\": {name}"
+      result.add toAdd.join(",\n    ")
+      result.add "\n  }\n\n"
+      #result.add "  result = jsondata.toCustom(" & typ & ")\n\n"
+
 outFile.writeLine makeFunctions()
+outFile.writeLine makeConstructors()
 
 when false:
   type
@@ -450,3 +485,11 @@ when false:
       "parameters": parameters
     }
     result = client.waitFut(tfOk, ok)
+  
+  proc inputMessageText*(text: FormattedText, disableWebPagePreview: bool, clearDraft: bool): JsonNode = 
+    result = %*{
+      "@type": "inputMessageText",
+      "text": text,
+      "disable_web_page_preview": disableWebPagePreview,
+      "clear_draft": clearDraft
+    }

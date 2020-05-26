@@ -38,27 +38,34 @@ proc handleAuth(client: TdlibClient, update: Update): Future[bool] {.async.} =
         "application_version": "1.0",
         "enable_storage_optimizer": true
       }
-    })
+    }, false)
   of asWaitEncryptionKey:
-    client.send(%*{"@type": "checkDatabaseEncryptionKey", "encryption_key": ""})
+    discard await client.checkDatabaseEncryptionKey("")
   of asWaitPhoneNumber:
-    client.send(%*{"@type": "setAuthenticationPhoneNumber", "phone_number": Phone})
+    discard await client.setAuthenticationPhoneNumber(
+      Phone, phoneNumberAuthenticationSettings(false, true, false).toCustom(PhoneNumberAuthenticationSettings)
+    )
   of asWaitCode:
     stdout.write "enter auth code: "
     let code = stdin.readLine()
-    client.send(%*{"@type": "checkAuthenticationCode", "code": code})
+    discard await client.checkAuthenticationCode(code)
   of asWaitRegistration:
     echo "Registration not implemented yet"
     quit(1)
   of asWaitPassword:
-    client.send(%*{"@type": "checkAuthenticationPassword", "password": Password})
+    discard await client.checkAuthenticationPassword(Password)
   else:
     echo authState
 
 import mathexpr, tables
 
 proc editMsg(client: TdlibClient, msg: Message, text: string): Future[Message] {.async.} = 
-  discard
+  result = await client.editMessageText(
+    msg.chatId, msg.id,
+    inputMessageText(
+      formattedText(text, @[]).toCustom(FormattedText), true, false
+    ).toCustom(InputMessageContent)
+  )
   #[
   client.send(%*{
     "@type": "editMessageText",
@@ -146,7 +153,7 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
   of "chatid":
     discard await client.editMsg(msg, "This chat's ID: " & $msg.chatId)
   of "ping":
-    let ping = await client.pingProxy()
+    let ping = await client.pingProxy(0)
     discard await client.editMsg(msg, $(ping.seconds * 1000))
 
 proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =

@@ -29,6 +29,7 @@ proc send*(client: TdlibClient, query: sink JsonNode, counter = true) =
   if counter:
     query["@extra"] = newJString($client.counter)
     inc client.counter
+  echo query
   td_json_client_send(client.impl, $query)
 
 proc receive*(client: TdlibClient, timeout: float): JsonNode =
@@ -66,7 +67,7 @@ proc newTdlibClient*(loggingLevel = 1): TdlibClient =
   result.send(%*{
     "@type": "setLogVerbosityLevel",
     "new_verbosity_level": loggingLevel
-  })
+  }, false)
 
 proc getEvent*(client: TdlibClient): Future[JsonNode] {.async.} = 
   ## A loop which runs until it receives actual data
