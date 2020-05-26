@@ -7,6 +7,21 @@
 # - How do make comments for different branches of an object variant?
 # - A few name conflicts in object variants with a lot of branches, maybe detect that
 # somehow?
+# - Helper procs to access fields shared across a lot of different branches,
+# something like this:
+when false:
+  proc chatId(u: Update): int64 = 
+    case u.kind
+    of uMessageSendAcknowledged:
+      u.msgChatId
+    of uMessageContent:
+      u.mcChatId
+    # other branches too
+    else:
+      raise newException(
+        ValueError, "Can't access chatId from Update with kind " & $u.kind
+      )
+
 
 import parseutils, strutils, strformat, strscans
 import tables

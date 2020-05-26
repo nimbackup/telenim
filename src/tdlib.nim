@@ -76,14 +76,15 @@ proc newTdlibClient(loggingLevel = 1): TdlibClient =
     "new_verbosity_level": loggingLevel
   })
 
-proc handleAuth(client: TdlibClient, event: JsonNode): Future[bool] {.async.} = 
+proc handleAuth(client: TdlibClient, update: Update): Future[bool] {.async.} = 
   result = true
-  let authState = event["authorization_state"]
-  case authState["@type"].getStr()
-  of "authorizationStateClosed":
+  let authState = update.asAuthorizationState
+
+  case authState.kind
+  of asClosed:
     result = false
   
-  of "authorizationStateWaitTdlibParameters":
+  of asWaitTdlibParameters:
     client.send(%*{
       "@type": "setTdlibParameters", "parameters": {
         "database_directory": "tdlib",
@@ -98,32 +99,36 @@ proc handleAuth(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
         "enable_storage_optimizer": true
       }
     })
-  of "authorizationStateWaitEncryptionKey":
+  of asWaitEncryptionKey:
     client.send(%*{"@type": "checkDatabaseEncryptionKey", "encryption_key": ""})
-  of "authorizationStateWaitPhoneNumber":
+  of asWaitPhoneNumber:
     client.send(%*{"@type": "setAuthenticationPhoneNumber", "phone_number": Phone})
-  of "authorizationStateWaitCode":
+  of asWaitCode:
     stdout.write "enter auth code: "
     let code = stdin.readLine()
     client.send(%*{"@type": "checkAuthenticationCode", "code": code})
-  of "authorizationStateWaitRegistration":
+  of asWaitRegistration:
     echo "Registration not implemented yet"
     quit(1)
-  of "authorizationStateWaitPassword":
+  of asWaitPassword:
     client.send(%*{"@type": "checkAuthenticationPassword", "password": Password})
+  else:
+    echo authState
 
 import mathexpr
 
-proc handleMsgUpdate(client: TdlibClient, event: JsonNode): Future[bool] {.async.} = 
+proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.} = 
   result = true
   # We only need to process our own messages
-  if not event["message"]["is_outgoing"].getBool():
+  let msg = update.nmMessage
+  if not msg.isOutgoing:
     return
-  let cid = event["message"]["chat_id"].getInt()
-  let mid = event["message"]["id"].getInt()
-  let msg = event{"message", "content", "text", "text"}.getStr("")
+  let cid = msg.chatId
+  let mid = msg.id
+  let msgText = if msg.content.kind == mText:
+    msg.content.messageteText.text else: ""
   #echo event.pretty()
-  case msg
+  case msgText
   of ".status":
     client.send(%*{
       "@type": "editMessageText",
@@ -139,8 +144,8 @@ proc handleMsgUpdate(client: TdlibClient, event: JsonNode): Future[bool] {.async
     })
   else:
     discard
-  if msg.startsWith ".solve":
-    let expr = msg.split(".solve ")[1]
+  if msgText.startsWith ".solve":
+    let expr = msgText.split(".solve ")[1]
     let e = newEvaluator()
     
     try:
@@ -173,11 +178,17 @@ proc handleMsgUpdate(client: TdlibClient, event: JsonNode): Future[bool] {.async
 
 proc handleEvent(client: TdlibClient, event: JsonNode): Future[bool] {.async.} =
   result = true
-  case event["@type"].getStr()
-  of "updateAuthorizationState":
-    result = await client.handleAuth(event)
-  of "updateNewMessage":
-    result = await client.handleMsgUpdate(event)
+  let typ = event["@type"].getStr()
+  if typ.startsWith("update"):
+    echo "trying to deserialize..."
+    echo event.pretty()
+    let update = event.toCustom(Update)
+    if update.kind == uAuthorizationState:
+      echo "before auth"
+      result = await client.handleAuth(update)
+    elif update.kind == uNewMessage:
+      echo "before new msg"
+      result = await client.handleMsgUpdate(update)
 
 proc getEvent(client: TdlibClient): Future[JsonNode] {.async.} = 
   # A loop which runs until it receives actual data
@@ -193,10 +204,6 @@ proc main {.async.} =
 
   while true:
     let event = await client.getEvent()
-    if event["@type"].getStr().startsWith "update":
-      let a = event.toCustom(Update)
-    else:
-      echo event["@type"]
     asyncCheck client.handleEvent(event)
 
 waitFor main()
