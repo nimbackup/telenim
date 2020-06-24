@@ -66,13 +66,14 @@ proc editMsg(client: TdlibClient, msg: Message, text: string): Future[Message] {
   result = await client.editMessageText(
     msg.chatId, msg.id,
     inputMessageText(
-      formattedText(text, @[]).toCustom(FormattedText), true, false
+      formattedText(text, @[]), true, false
     )
   )
 
 proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.} = 
   result = true
   let msg = update.nmMessage
+  echo msg.id
   if not msg.isOutgoing:
     return
   let msgText = if msg.content.kind == mText:
@@ -81,6 +82,7 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
     return
   let parts = msgText[1..^1].split(Whitespace)
   if parts.len == 0: return
+
   case parts[0]
   of "status":
     dawait client.editMsg(msg, "All up and running!")
@@ -131,9 +133,38 @@ proc handleMsgUpdate(client: TdlibClient, update: Update): Future[bool] {.async.
     if parts.len < 3:
       dawait client.editMsg(msg, "Usage: .repeat {message} {count:int}")
     let cnt = parts[^1].parseInt()
-    #for i in 0 ..< cnt:
-    #  dawait client.send %*{
-    #    "@type": "sendMessage",
+    let data = parts[1 .. ^2].join(" ")
+    for i in 0 ..< cnt:
+      dawait client.deleteMessages(
+        chatId = msg.chatId,
+        messageIds = @[msg.id],
+        false
+      )
+      dawait client.sendMessage(
+        chatId = msg.chatId,
+        replyToMessageId = 0,
+        options = %*{"type": "sendMessageOptions"},
+        replyMarkup = newJNull(),
+        inputMessageContent = inputMessageText(
+          formattedText(data, @[]), true, false
+        )
+      )
+  of "gc":
+    dawait client.deleteMessages(
+      chatId = msg.chatId,
+      messageIds = @[msg.id],
+      false
+    )
+    let toSend = GC_getStatistics()
+    dawait client.sendMessage(
+      chatId = msg.chatId,
+      replyToMessageId = 0,
+      options = %*{"type": "sendMessageOptions"},
+      replyMarkup = newJNull(),
+      inputMessageContent = inputMessageText(
+        formattedText(toSend, @[textEntity(0, int32 len(toSend), textEntityTypeCode())]), true, false
+      )
+    )
   
   of "chatid":
     dawait client.editMsg(msg, "This chat's ID: " & $msg.chatId)

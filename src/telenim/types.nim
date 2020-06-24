@@ -4913,12 +4913,19 @@ template waitFut*(client, kind, field: untyped): untyped =
   let tdlibFut = await fut
   tdlibFut.field
 
+import strutils
+
 proc completeFut*(event: sink JsonNode) = 
   # TODO: Ideally this check shouldn't be there and *all* events we receive
   # should have that field (except updates of course)
   if "@extra" notin event:
     return
   # Get the index of the future
+  if event["@type"].getStr() == "error":
+    let err = event.toCustom(Error)
+    raise newException(
+      ValueError, "Tdlib error code $1, message: $2" % [$err.code, err.message]
+    )
   let idx = parseInt(event["@extra"].getStr())
   event.delete("@extra")
   let waitingFut = futs[idx]
@@ -5027,6 +5034,7 @@ proc completeFut*(event: sink JsonNode) =
   of tfTestVectorStringObject:
     completedFut.testvectorstringobject = event.toCustom(TestVectorStringObject)
   of tfMessage:
+    echo event
     completedFut.message = event.toCustom(Message)
   of tfSupergroupFullInfo:
     completedFut.supergroupfullinfo = event.toCustom(SupergroupFullInfo)
@@ -6676,7 +6684,7 @@ proc disconnectWebsite*(client: TdlibClient, websiteId: string): Future[Ok] {.as
   }
   result = client.waitFut(tfOk, ok)
 
-proc sendMessage*(client: TdlibClient, chatId: int64, replyToMessageId: int64, options: SendMessageOptions, replyMarkup: ReplyMarkup, inputMessageContent: InputMessageContent): Future[Message] {.async.} = 
+proc sendMessage*(client: TdlibClient, chatId: int64, replyToMessageId: int64, options: JsonNode, replyMarkup: JsonNode, inputMessageContent: JsonNode): Future[Message] {.async.} = 
   ## Sends a message. Returns the sent message
   ## **chat_id** - Target chat
   ## **reply_to_message_id** - Identifier of the message to reply to or 0
@@ -12631,7 +12639,7 @@ proc video*(duration: int32, width: int32, height: int32, fileName: string, mime
     "video": video
   }
 
-proc formattedText*(text: string, entities: seq[TextEntity]): JsonNode = 
+proc formattedText*(text: string, entities: seq[JsonNode]): JsonNode = 
   result = %*{
     "@type": "formattedText",
     "text": text,
@@ -12754,7 +12762,7 @@ proc chats*(chatIds: seq[int64]): JsonNode =
     "chat_ids": chatIds
   }
 
-proc textEntity*(offset: int32, length: int32, typ: TextEntityType): JsonNode = 
+proc textEntity*(offset: int32, length: int32, typ: JsonNode): JsonNode = 
   result = %*{
     "@type": "textEntity",
     "offset": offset,
@@ -13802,7 +13810,7 @@ proc passportSuitableElement*(typ: PassportElementType, isSelfieRequired: bool, 
     "is_native_name_required": isNativeNameRequired
   }
 
-proc inputMessageText*(text: FormattedText, disableWebPagePreview: bool, clearDraft: bool): JsonNode = 
+proc inputMessageText*(text: JsonNode, disableWebPagePreview: bool, clearDraft: bool): JsonNode = 
   result = %*{
     "@type": "inputMessageText",
     "text": text,
