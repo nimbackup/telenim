@@ -9,14 +9,6 @@ export json, options
 
 template jsonName*(name: string) {.pragma.}
 
-macro isRefSkipDistinct(arg: typed): untyped =
-  var impl = getTypeImpl(arg)
-  if impl.kind == nnkBracketExpr and impl[0].eqIdent("typeDesc"):
-    impl = getTypeImpl(impl[1])
-  while impl.kind == nnkDistinctTy:
-    impl = getTypeImpl(impl[0])
-  result = newLit(impl.kind == nnkRefTy)
-
 proc initFromJson(dst: var string; jsonNode: JsonNode; jsonPath: var string)
 proc initFromJson(dst: var bool; jsonNode: JsonNode; jsonPath: var string)
 proc initFromJson(dst: var JsonNode; jsonNode: JsonNode; jsonPath: var string)
@@ -200,18 +192,21 @@ proc getPragmaName(sym: NimNode, name = "jsonName"): (bool, string) =
   else:
     echo treeRepr owner
     error("error!")
-  let pragma = findPragmaExprForFieldSym(owner, sym)
-  if pragma.kind == nnkPragma and $pragma[0][0] == name:
+  var pragma = findPragmaExprForFieldSym(owner, sym)
+  if pragma.kind == nnkNilLit:
+    # no pragma found
+    discard
+  if pragma.kind == nnkPragma and ($pragma[0][0]) == name:
     result = (true, pragma[0][1].strVal)
-  if not result[0]:
-    echo "---------------------------------------"
-
-    echo treeRepr owner
-    echo "-----------------sym repr :"
-    echo repr sym
-    echo "--------------------sym impl:"
-    echo treerepr sym.owner.getImpl()
-    error("error!")
+  when false:
+    if not result[0]:
+      echo "---------------------------------------"
+      echo treeRepr owner
+      echo "-----------------sym repr :"
+      echo repr sym
+      echo "--------------------sym impl:"
+      echo treerepr sym.owner.getImpl()
+      error("error!")
 
 proc foldObjectBody(dst, typeNode, tmpSym, jsonNode, jsonPath, originalJsonPathLen: NimNode): void {.compileTime.} =
   case typeNode.kind

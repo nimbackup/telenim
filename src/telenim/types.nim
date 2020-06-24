@@ -5669,7 +5669,7 @@ proc checkChangePhoneNumberCode*(client: TdlibClient, code: string): Future[Ok] 
   }
   result = client.waitFut(tfOk, ok)
 
-proc setAuthenticationPhoneNumber*(client: TdlibClient, phoneNumber: string, settings: PhoneNumberAuthenticationSettings): Future[Ok] {.async.} = 
+proc setAuthenticationPhoneNumber*(client: TdlibClient, phoneNumber: string, settings: JsonNode): Future[Ok] {.async.} = 
   ## Sets the phone number of the user and sends an authentication code to the user. Works only when the current authorization state is authorizationStateWaitPhoneNumber,
   ## **phone_number** - The phone number of the user, in international format
   ## **settings** - Settings for the authentication of the user's phone number
@@ -6552,7 +6552,7 @@ proc getRecentlyVisitedTMeUrls*(client: TdlibClient, referrer: string): Future[T
   }
   result = client.waitFut(tfTMeUrls, tmeurls)
 
-proc editMessageText*(client: TdlibClient, chatId: int64, messageId: int64,  inputMessageContent: InputMessageContent, replyMarkup = none(ReplyMarkup)): Future[Message] {.async.} = 
+proc editMessageText*[T](client: TdlibClient, chatId: int64, messageId: int64, inputMessageContent: T, replyMarkup = none(ReplyMarkup)): Future[Message] {.async.} = 
   ## Edits the text of a message (or a text of a game message). Returns the edited message after the edit is completed on the server side
   ## **chat_id** - The chat the message belongs to
   ## **message_id** - Identifier of the message
@@ -8751,7 +8751,7 @@ proc searchChatMessages*(client: TdlibClient, chatId: int64, query: string, send
   }
   result = client.waitFut(tfMessages, messages)
 
-proc setTdlibParameters*(client: TdlibClient, parameters: TdlibParameters): Future[Ok] {.async.} = 
+proc setTdlibParameters*[T](client: TdlibClient, parameters: T): Future[Ok] {.async.} = 
   ## Sets the parameters for TDLib initialization. Works only when the current authorization state is authorizationStateWaitTdlibParameters
   ## **parameters** - Parameters
   client.send %*{
