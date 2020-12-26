@@ -334,13 +334,13 @@ proc makeFunctions(): string =
 # TODO: Is this the best/most efficient way?
 var futs = newTable[int, TdlibEntry]()
 
-template waitFut(client, kind, field: untyped): untyped = 
+template waitFut*(client, kind, field: untyped): untyped = 
   let fut = newFuture[TdlibFuture]()
   futs[client.counter-1] = (kind, fut)
   let tdlibFut = await fut
   tdlibFut.field
 
-proc completeFut(event: sink JsonNode) = 
+proc completeFut*(event: sink JsonNode) = 
   # TODO: Ideally this check shouldn't be there and *all* events we receive
   # should have that field (except updates of course)
   if "@extra" notin event:

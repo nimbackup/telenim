@@ -9,7 +9,7 @@ proc parseConfig(path: string): (string, string, int32, string) =
   (
     a["phone"].getStr(),
     a{"password"}.getStr(""),
-    int32 a["api_id"].getInt(),
+    int32 parseInt(a["api_id"].getStr()),
     a["api_hash"].getStr()
   )
 
@@ -64,7 +64,7 @@ proc handleAuth(client: TdlibClient, update: Update): Future[bool] {.async.} =
 
 proc editMsg(client: TdlibClient, msg: Message, text: string): Future[Message] {.async.} = 
   result = await client.editMessageText(
-    msg.chatId, msg.id,
+    msg.chatId, msg.id, newJNull(),
     inputMessageText(
       formattedText(text, @[]), true, false
     )

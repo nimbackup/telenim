@@ -1,7 +1,7 @@
 import json, os, asyncdispatch, strutils, tables
 
 const
-  tdlib = "lib" / "libtdjson.so(|.1.6.0)"
+  tdlib = "lib" / "libtdjson.so(|.1.7.0)"
 
 {.push importc, dynlib: tdlib.}
 proc td_json_client_create(): pointer
