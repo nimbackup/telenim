@@ -1,3 +1,7 @@
+# :warning: Archived - please contribute to https://github.com/nimgram/nimgram instead
+
+
+
 # telenim
 This library (will be) a high-level TDLib wrapper for Nim.
 
